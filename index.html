@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Early-Exit Neural Network</title>
+<style>
+  :root { --bg:#f6f8fb; --card:#fff; --ink:#14213d; --muted:#5b6b82; --teal:#12a594; --navy:#1b2b4b; --red:#c0392b; --green:#1e8e5a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  main { max-width: 960px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 1.6rem; }
+  h3 { margin: 0 0 8px; }
+  p.sub { margin: 0 0 20px; color: var(--muted); }
+  .card { background: var(--card); border-radius: 12px; padding: 16px; box-shadow: 0 1px 4px rgba(20,33,61,.12); margin-bottom: 16px; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; }
+  .row > * { flex:1 1 260px; }
+  button { background: var(--teal); color:#fff; border:0; border-radius: 8px; padding: 10px 16px; font-size: 1rem; cursor: pointer; margin-right: 8px; margin-top: 8px; }
+  button.alt { background: var(--navy); }
+  button:disabled { opacity:.6; cursor:wait; }
+  input[type=range] { width:100%; }
+  .big { font-size: 2rem; font-weight: 700; margin: 4px 0; }
+  .tag { display:inline-block; padding:2px 10px; border-radius: 999px; font-size:.85rem; color:#fff; }
+  .early { background: var(--green); } .deep { background: var(--navy); }
+  .ok { color: var(--green); font-weight: 600; } .bad { color: var(--red); font-weight: 600; }
+  table { width:100%; border-collapse: collapse; font-size:.9rem; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #e3e8ef; white-space:nowrap; }
+  .scroll { overflow-x:auto; }
+  .muted { color: var(--muted); font-size:.85rem; }
+  .stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:12px; }
+  .stat b { display:block; font-size:1.3rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Early-Exit Neural Network</h1>
+  <p class="sub">Easy inputs are answered at an early exit; hard ones continue through the deeper layers.</p>
+
+  <div class="card">
+    <h3>Try it</h3>
+    <label for="t">Confidence threshold: <b id="tv">0.80</b></label>
+    <input id="t" type="range" min="0.3" max="0.99" step="0.01" value="0.8">
+    <p class="muted">Lower = more early exits (faster, less accurate). Higher = more samples go deep.</p>
+    <button id="go" onclick="classify()">Classify a random sample</button>
+    <button id="many" class="alt" onclick="many()">Run 20 samples</button>
+    <div id="result"></div>
+  </div>
+
+  <div class="card">
+    <h3>Live statistics (from the database)</h3>
+    <div id="stats" class="stats"></div>
+    <p class="muted">Live timings are single measurements and noisy. The benchmark table below is the reference.</p>
+  </div>
+
+  <div class="card">
+    <h3>Recent predictions</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>Time</th><th>Threshold</th><th>Path</th><th>Early-exit</th><th>Baseline</th><th>True</th><th>ms</th></tr></thead>
+      <tbody id="history"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card">
+    <h3>Benchmark (4,000 test samples)</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>Threshold</th><th>Accuracy</th><th>Exit rate</th><th>ms/sample</th><th>Speedup</th></tr></thead>
+      <tbody id="bench"></tbody>
+    </table></div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const pct = v => v == null ? "-" : (v * 100).toFixed(1) + "%";
+const ms = v => v == null ? "-" : v.toFixed(3) + " ms";
+
+$("t").addEventListener("input", () => { $("tv").textContent = (+$("t").value).toFixed(2); });
+
+function show(d) {
+  const e = d.early_exit, b = d.baseline, t = d.true_label;
+  const mark = p => p === t ? '<span class="ok">correct</span>' : '<span class="bad">wrong</span>';
+  $("result").innerHTML = `
+    <div class="row" style="margin-top:12px">
+      <div class="card"><h3>Early-exit model</h3>
+        <div class="big">Class ${e.prediction}</div>
+        <span class="tag ${e.exited_early ? "early" : "deep"}">${e.exited_early ? "answered at Exit 1" : "went to the deep layers"}</span>
+        <p>${mark(e.prediction)} &middot; Exit-1 confidence ${(e.exit1_confidence * 100).toFixed(1)}% &middot; ${e.ms.toFixed(3)} ms</p></div>
+      <div class="card"><h3>Full-depth baseline</h3>
+        <div class="big">Class ${b.prediction}</div>
+        <span class="tag deep">always runs every layer</span>
+        <p>${mark(b.prediction)} &middot; ${b.ms.toFixed(3)} ms</p></div>
+    </div>
+    <p class="muted">True class: ${t} &middot; threshold ${d.threshold}</p>`;
+}
+
+async function one() {
+  const r = await fetch("/predict/random?threshold=" + $("t").value);
+  return r.json();
+}
+
+async function classify() {
+  $("go").disabled = true; $("many").disabled = true;
+  try { show(await one()); await refresh(); }
+  catch (e) { $("result").textContent = "Error: " + e; }
+  $("go").disabled = false; $("many").disabled = false;
+}
+
+async function many() {
+  $("go").disabled = true; $("many").disabled = true;
+  try { for (let i = 0; i < 20; i++) { show(await one()); } await refresh(); }
+  catch (e) { $("result").textContent = "Error: " + e; }
+  $("go").disabled = false; $("many").disabled = false;
+}
+
+async function refresh() {
+  try {
+    const s = await (await fetch("/stats")).json();
+    $("stats").innerHTML = [
+      ["Predictions saved", s.total], ["Exit-1 rate", pct(s.exit_rate)],
+      ["Early-exit accuracy", pct(s.early_exit_accuracy)], ["Baseline accuracy", pct(s.baseline_accuracy)],
+      ["Avg early-exit time", ms(s.avg_early_exit_ms)], ["Avg baseline time", ms(s.avg_baseline_ms)]
+    ].map(([k, v]) => `<div class="stat"><span class="muted">${k}</span><b>${v}</b></div>`).join("");
+    const h = await (await fetch("/history?limit=10")).json();
+    $("history").innerHTML = h.map(r => `<tr><td>${new Date(r.created_at).toLocaleTimeString()}</td><td>${r.threshold.toFixed(2)}</td><td>${r.exited_early ? "Exit 1" : "Deep"}</td><td>${r.ee_prediction}</td><td>${r.baseline_prediction}</td><td>${r.true_label ?? "-"}</td><td>${r.ee_ms.toFixed(3)}</td></tr>`).join("");
+  } catch (e) { $("stats").textContent = "Database unavailable"; }
+}
+
+async function loadResults() {
+  try {
+    const d = await (await fetch("/results")).json();
+    $("bench").innerHTML =
+      `<tr><td>Baseline</td><td>${pct(d.baseline.test_acc)}</td><td>-</td><td>${d.baseline.ms.toFixed(3)}</td><td>1.00x</td></tr>` +
+      d.rows.map(r => `<tr><td>${r.threshold}</td><td>${pct(r.test_acc)}</td><td>${pct(r.exit_rate)}</td><td>${r.ms.toFixed(3)}</td><td>${r.speedup.toFixed(2)}x</td></tr>`).join("");
+  } catch (e) { $("bench").textContent = "Results unavailable"; }
+}
+
+(async () => {
+  try {
+    const h = await (await fetch("/health")).json();
+    $("t").value = h.default_threshold; $("tv").textContent = (+h.default_threshold).toFixed(2);
+  } catch (e) {}
+  loadResults(); refresh();
+})();
+</script>
+</body>
+</html>
