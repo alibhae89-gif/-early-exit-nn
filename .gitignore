@@ -3,3 +3,8 @@ __pycache__/
 *.log
 .env
 *.pyc
+stage2/
+sms/
+train2.log
+nohup.out
+*.safetensors
