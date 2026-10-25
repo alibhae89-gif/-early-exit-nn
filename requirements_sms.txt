@@ -1,0 +1,7 @@
+numpy
+fastapi
+uvicorn
+psycopg[binary]
+joblib
+scikit-learn==1.9.1
+transformers==5.20.2

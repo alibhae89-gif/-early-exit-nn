@@ -1,30 +1,49 @@
-# Early-Exit Neural Network
+# Early-Exit SMS Spam Screener
 
-A small neural network with two exits. Easy inputs are answered at an early exit,
-and hard ones continue through the deeper layers. Includes a REST API, a PostgreSQL
-log of every prediction, and a web page with live statistics.
+A two-stage spam filter built to cut latency and compute cost. A tiny fast model (TF-IDF +
+logistic regression) answers messages it is confident about. Only unsure messages go to a
+heavier language model (DistilBERT). Includes a REST API, a PostgreSQL log, and a web page
+with a cost calculator.
 
-## Results (4,000 test samples, synthetic 4-class data, deep path width 1024)
+Message text is never stored. The database keeps only the verdict, timing and message length.
 
-| Threshold | Accuracy | Exit rate | ms/sample | Speedup |
-|---|---|---|---|---|
-| Baseline (full depth) | 88.5% | n/a | 0.539 | 1.00x |
-| 0.5 | 82.2% | 76.7% | 0.216 | 2.49x |
-| 0.6 | 85.9% | 58.0% | 0.384 | 1.40x |
-| 0.7 | 87.7% | 41.2% | 0.440 | 1.22x |
-| 0.8 | 88.5% | 25.5% | 0.516 | 1.04x |
-| 0.9 | 88.8% | 10.7% | 0.607 | 0.89x |
+## Results (836 held-out test messages, about 112 spam)
 
-## Findings
+Timings are single-message CPU runs on a shared 2-vCPU cloud server.
 
-- Early-exit saves time only when the skipped layers are expensive. With a tiny network
-  (width 128) the confidence check cost as much as it saved.
-- Speed is traded for accuracy through the threshold. Matching baseline accuracy gave
-  almost no speedup on this synthetic data.
-- Timings come from CPU runs on a shared cloud server and vary between runs.
+| Setup | Accuracy | ms/message | Server-hours per million messages | Spam caught | Real messages flagged |
+|---|---|---|---|---|---|
+| Cheap model only | 98.4% | 0.37 | 0.10 | 92.9% | 5 |
+| Heavy model only | 99.2% | 43.8 | 12.2 | 97.3% | 4 |
+| Early-exit, threshold 0.7 | 99.0% | 1.13 | 0.31 | 94.6% | 2 |
+| Early-exit, threshold 0.8 | 99.3% | 2.09 | 0.58 | 94.6% | 0 |
+| Early-exit, threshold 0.9 | 99.5% | 4.04 | 1.12 | 96.4% | 0 |
+| Early-exit, threshold 0.95 | 99.5% | 7.89 | 2.19 | 97.3% | 1 |
+| Early-exit, threshold 0.99 | 99.2% | 34.80 | 9.67 | 97.3% | 4 |
 
-## Run it (Docker)
+At threshold 0.9 the average message is about 11 times faster than heavy-only, with similar
+accuracy. The threshold trades speed for care: lower is faster, higher sends more messages
+to the heavy model.
 
+## Limits
+
+- The test set is small (836 messages), and each result comes from one training run.
+  Differences of a few messages are noise, so this does not show early-exit beats heavy-only.
+- The data is an old English SMS collection. This is a demo, not production protection.
+- Timings come from one cloud server. This version has not yet been tested on a local PC.
+- With an always-on server, the saving appears as capacity (messages one server can handle),
+  not a smaller bill, unless you pay per compute second.
+
+## Run it
+
+The trained model folder (stage2/, about 268 MB) is not in this repo. Rebuild it:
+
+    mkdir -p sms
+    curl -sSL -o sms/sms.tsv https://raw.githubusercontent.com/justmarkham/pycon-2016-tutorial/master/data/sms.tsv
+    pip install torch transformers scikit-learn pandas joblib
+    python train_stage1.py
+    python train_stage2.py      # about 18 minutes on 2 CPUs
+    python benchmark_sms.py
     echo "DB_PASSWORD=$(openssl rand -hex 16)" > .env
     docker compose up -d --build
 
@@ -32,18 +51,15 @@ Then open http://localhost:8000/ (web app) or http://localhost:8000/docs (API).
 
 ## API
 
-- GET /predict/random?threshold=0.8 : classify a random test sample
-- POST /predict : classify 20 feature values
+- POST /screen : {"text": "...", "threshold": 0.9} returns the verdict and which stage answered
 - GET /stats, GET /history : read from the database
 - GET /results : benchmark table
 - GET /health
 
 ## Files
 
-data.py, model.py / model_xl.py, train_*.py, final_train.py, benchmark.py,
-scale_test.py (experiments), app.py + index.html (service), Dockerfile,
-docker-compose.yml.
+sms_app.py + sms.html (service), train_stage1.py, train_stage2.py, benchmark_sms.py,
+sms_data.py (shared data split), Dockerfile.sms, docker-compose.yml.
 
-## Limitations
-
-Synthetic data only. This version is a technique demonstration, not a production system.
+Version 1 (an early-exit network on synthetic data) is also kept here: model.py, model_xl.py,
+app.py, index.html, Dockerfile, docker-compose.v1.yml.

@@ -13,8 +13,10 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-  api:
-    build: .
+  screener:
+    build:
+      context: .
+      dockerfile: Dockerfile.sms
     restart: unless-stopped
     depends_on:
       db:
